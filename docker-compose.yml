@@ -1,0 +1,10 @@
+services:
+  redirect:
+    build: .
+    container_name: ga-ru-redirect
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - REDIRECT_URL=https://discord.com/invite/s6ZgA6S9xn
+      - PORT=3000
