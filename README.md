@@ -1,11 +1,11 @@
 # ga-ru-discord-redirect-server
 
-Простейший Node.js HTTP-сервер, который редиректит любой запрос на заданную Discord-ссылку.  
+Простейший Node.js HTTP-сервер, который редиректит любой запрос на заданную Discord-ссылку.
 Собран в Docker-контейнер, деплоится через Dockge.
 
 ## Как это работает
 
-Сервер на любой запрос отдаёт HTTP `302 Found` с заголовком `Location`.  
+Сервер на любой запрос отдаёт HTTP `302 Found` с заголовком `Location`.
 Целевая ссылка и порт задаются через переменные окружения:
 
 | Переменная      | Назначение                       | Значение по умолчанию                       |
@@ -17,28 +17,76 @@
 
 ## Деплой на VPS через Dockge
 
+### Как Dockge работает со сборкой
+
+Dockge хранит все стеки в `/opt/dockge/stacks/<имя-стека>/`.
+Когда в compose-файле указано `build: .`, Docker Compose ищет `Dockerfile` и исходники **в этой же папке**.
+Поэтому недостаточно просто вставить compose-файл через веб-интерфейс — нужно, чтобы в папке стека лежали все файлы проекта.
+
 ### 1. Подготовка
 
-Убедись, что на VPS установлены **Docker** и **Docker Compose**.
-
-Dockge обычно уже предоставляет окружение с Docker, но если ставишь вручную:
+Убедись, что на VPS установлены **Docker** и **Docker Compose**:
 
 ```bash
 curl -fsSL https://get.docker.com | sh
 ```
 
-### 2. Загрузка проекта
+### 2. Перенос файлов в папку стека
 
-На VPS клонируй репозиторий и зайди в папку:
+Dockge создаёт папку стека автоматически при первом деплое, но мы можем создать её сами и положить туда файлы проекта.
+
+**Способ A — клонирование репозитория:**
+
+Зайди на VPS по SSH и выполни:
 
 ```bash
-git clone <url-твоего-репозитория> ga-ru-redirect
-cd ga-ru-redirect
+mkdir -p /opt/dockge/stacks/ga-ru-redirect
+cd /opt/dockge/stacks/ga-ru-redirect
+git clone <url-твоего-репозитория> .
 ```
 
-### 3. Настройка переменных (опционально)
+После этого в `/opt/dockge/stacks/ga-ru-redirect/` должны лежать:
+```
+Dockerfile
+server.js
+package.json
+docker-compose.yml
+.dockerignore
+```
 
-Отредактируй `docker-compose.yml`, если нужно изменить ссылку редиректа или порт:
+**Способ Б — ручное копирование через SCP:**
+
+Скачай проект локально и скопируй файлы на VPS:
+
+```bash
+# У себя на машине
+scp server.js Dockerfile docker-compose.yml package.json .dockerignore \
+    user@<vps-ip>:/opt/dockge/stacks/ga-ru-redirect/
+```
+
+### 3. Запуск через Dockge
+
+Теперь есть два пути:
+
+**Вариант 1 (проще) — Dockge сам найдёт compose-файл:**
+
+1. Открой веб-интерфейс Dockge (`http://<vps-ip>:5001`)
+2. Нажми кнопку **Scan** (сканирование)
+3. Dockge обнаружит compose-файл в `/opt/dockge/stacks/ga-ru-redirect/docker-compose.yml`
+4. Нажми на появившийся стек и затем **Deploy**
+
+Dockge соберёт образ и запустит контейнер.
+
+**Вариант 2 — создать стек вручную:**
+
+1. Нажми **+ Compose**
+2. В поле *Compose name* введи `ga-ru-redirect`
+3. Вставь содержимое `docker-compose.yml` в текстовое поле
+4. Нажми **Deploy**
+
+### 4. Настройка переменных (опционально)
+
+Если нужно изменить ссылку редиректа — отредактируй `docker-compose.yml` (можно прямо через Dockge) и нажми Re-deploy. Пересобирать образ не нужно:
 
 ```yaml
 environment:
@@ -46,52 +94,30 @@ environment:
   - PORT=3000
 ```
 
-### 4. Запуск через Dockge
-
-1. Открой веб-интерфейс Dockge (обычно `http://<vps-ip>:5001`)
-2. Нажми **+ Compose**
-3. В поле *Compose name* введи `ga-ru-redirect`
-4. Скопируй содержимое `docker-compose.yml` в текстовое поле
-5. Нажми **Deploy**
-
-Dockge сам соберёт образ и запустит контейнер.
-
 ### 5. Проксирование снаружи
 
-Сервер слушает порт `3000` внутри контейнера.  
-Чтобы привязать домен `ga-ru.ru`, настрой обратный прокси (nginx, Caddy, Traefik).
+Сервер проброшен на порт `80` (согласно `docker-compose.yml`: `"80:3000"`).
+Домен `ga-ru.ru` должен указывать A-записью на IP твоего VPS.
+Дополнительный обратный прокси не обязателен — сервер уже торчит на 80 порту.
 
-Пример для **Caddy** (файл `Caddyfile`):
+Если понадобится HTTPS, удобнее всего Caddy:
 
 ```
 ga-ru.ru {
-    reverse_proxy localhost:3000
+    reverse_proxy localhost:8080
 }
 ```
 
-Пример для **nginx**:
-
-```nginx
-server {
-    listen 80;
-    server_name ga-ru.ru;
-
-    location / {
-        proxy_pass http://localhost:3000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
-```
+(тогда в `docker-compose.yml` поменяй `"80:3000"` на `"8080:3000"` и поставь Caddy отдельно)
 
 ### 6. Проверка
 
 ```bash
-curl -I http://localhost:3000/
+curl -I http://localhost/
 # HTTP/1.1 302 Found
 # Location: https://discord.com/invite/s6ZgA6S9xn
 
-curl http://localhost:3000/health
+curl http://localhost/health
 # ok
 ```
 
